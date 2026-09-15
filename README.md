@@ -35,6 +35,50 @@ In fast-paced OPDs, patients often express symptoms in an unstructured manner du
 
 ---
 
+┌───────────────────┐
+│ Patient Interface │
+└─────────┬─────────┘
+          ↓
+┌────────────────────┐
+│ Voice / Text Input │
+└─────────┬──────────┘
+          ↓
+┌────────────────────┐
+│    AI Vaidya       │
+└─────────┬──────────┘
+          ↓
+┌─────────────────────────┐
+│ Clinical Story Engine   │
+└─────────┬───────────────┘
+          ↓
+┌─────────────────────────┐
+│ Structured Case Summary │
+└─────────┬───────────────┘
+          ↓
+┌────────────────────┐
+│ Doctor Dashboard   │
+└────────────────────┘
+
+## API Design
+
+POST /api/patient/session
+Creates a patient interaction session.
+
+POST /api/patient/message
+Receives patient input and returns the next AI question.
+
+POST /api/documents/upload
+Uploads a prescription or medical document.
+
+POST /api/clinical-story/generate
+Converts collected information into a structured case.
+
+GET /api/clinical-story/:id
+Retrieves the generated clinical story.
+
+GET /api/doctor/patient/:id
+Retrieves the doctor-facing patient summary.
+
 ## 🚀 How to Run locally
 
 ### Step 1: Open Terminal in Project Directory
@@ -69,7 +113,197 @@ cmd /c npm run dev
 | **Admin Analytics Dashboard** | `/admin` | OPD throughput metrics, OCR accuracy logs, queue management |
 | **Hackathon Split-Screen** | `/demo` | Live side-by-side judge demo (Patient Voice Kiosk $\leftrightarrow$ Doctor Cockpit) |
 
+
+## User Roles
+
+### Patient
+- Select language
+- Describe symptoms
+- Answer follow-up questions
+- Upload documents
+- Review collected information
+
+### Doctor
+- View patient story
+- Review structured information
+- Edit generated summary
+- Verify clinical information
+
+### Administrator (Planned)
+- Manage users
+- Manage devices
+- View system activity
+- Configure hospital settings
 ---
+## Key Features
+
+- Multilingual patient interaction
+- AI-guided symptom questioning
+- Clinical Story Engine
+- Doctor-facing case dashboard
+- Medical document upload
+- Red-flag highlighting
+- AYUSH assessment prototype
+- Editable clinical summaries
+- QR-based phone access
+- Kiosk deployment concept
+- Waiting-room tablet support
+
+## Module Architecture
+
+### Patient Module
+Input:
+- Language
+- Symptom text/voice
+- Uploaded documents
+
+Processing:
+- Input validation
+- Conversation flow
+- Symptom collection
+
+Output:
+- Structured patient responses
+
+## Input / Output Specification
+
+### Patient Input
+
+- Language: string
+- Message: string
+- Session ID: string
+- Document: file (optional)
+
+### Clinical Story Output
+
+- Chief complaint
+- Duration
+- Site
+- Character
+- Severity
+- Associated symptoms
+- Aggravating factors
+- Relieving factors
+- Medication information
+- Red-flag indicators
+
+### AI Vaidya Module
+Input:
+- Patient response
+
+Processing:
+- Question selection
+- Conversation state
+- Follow-up prompts
+
+Output:
+- Next question
+- Structured symptom data
+
+Patient Input
+     ↓
+Input Validation
+     ↓
+Conversation Engine
+     ↓
+Question/Response Processing
+     ↓
+Clinical Data Extraction
+     ↓
+Clinical Story Object
+     ↓
+Red-Flag Screening
+     ↓
+Doctor Dashboard
+
+### Clinical Story Module
+Input:
+- Conversation data
+- Document information
+
+Processing:
+- Information extraction
+- Field organization
+
+Output:
+- Structured clinical story
+
+## Database Schema
+
+### Patient
+- patient_id
+- age
+- sex
+- preferred_language
+- created_at
+
+### Session
+- session_id
+- patient_id
+- status
+- started_at
+- ended_at
+
+### Conversation
+- message_id
+- session_id
+- role
+- message
+- timestamp
+
+### ClinicalStory
+- story_id
+- session_id
+- chief_complaint
+- onset
+- site
+- character
+- severity
+- associated_symptoms
+- aggravating_factors
+- relieving_factors
+- doctor_verified
+
+### Document
+- document_id
+- session_id
+- file_name
+- file_type
+- extraction_status
+
+## Error Handling
+
+### Patient Input
+- Empty message → prompt user to enter information
+- Unsupported language → display supported languages
+- Unexpected response → request clarification
+
+### Document Upload
+- Invalid file type → reject upload
+- File too large → show validation message
+- Upload failure → allow retry
+- Unreadable image → request clearer image
+
+### AI Processing
+- Missing response → retry question
+- Unclear information → ask follow-up question
+- Processing failure → show fallback message
+
+### Doctor Dashboard
+- Missing patient data → show incomplete-data state
+- Failed data retrieval → show retry option
+
+### Doctor Module
+Input:
+- Clinical story
+
+Processing:
+- Review
+- Editing
+- Verification
+
+Output:
+- Doctor-reviewed case information
 
 ## 🛠️ Review 1 Completion Summary (35% Milestone)
 
@@ -86,7 +320,127 @@ cmd /c npm run dev
 | **Unified Authentication Portal** | ✅ Completed | Integrated `/login` for Doctors, Admins, and Passwordless Patients |
 | **Backend & Production AI** | 🔄 Pending | Real production LLM, server API, and database integration planned for Phase 2 |
 
+## Testing Strategy
+
+### Unit Testing
+Test:
+- Input validation
+- Symptom field extraction
+- Severity validation
+- Session creation
+- Document validation
+- Clinical story formatting
+
+### Integration Testing
+Test:
+- Patient → AI Vaidya
+- AI Vaidya → Clinical Story Engine
+- Clinical Story → Doctor Dashboard
+- Document → Story generation
+
+### UI Testing
+Test:
+- Mobile responsiveness
+- Language selection
+- Form validation
+- Document upload
+- Dashboard interaction
+
+### Error Testing
+Test:
+- Empty input
+- Invalid files
+- Network failure
+- Missing data
+- AI processing failure
+
+## Security Considerations
+
+Planned security measures include:
+
+- Authentication
+- Role-based access
+- Session-based patient access
+- Secure API communication
+- Input validation
+- File validation
+- Access control for doctor data
+- Minimal collection of patient information
+- Audit logging
+
+saarthi-ai/
+│
+├── public/
+│
+├── src/
+│   ├── components/
+│   ├── pages/
+│   ├── modules/
+│   ├── services/
+│   ├── types/
+│   ├── utils/
+│   ├── data/
+│   └── main.tsx
+│
+├── screenshots/
+├── docs/
+│
+├── README.md
+├── package.json
+├── tsconfig.json
+└── vite.config.ts
+
+## Privacy
+
+Saarthi.AI is designed with privacy considerations including:
+
+- Minimal data collection
+- Patient-session isolation
+- Controlled doctor access
+- Explicit separation of demo and real data
+- Future secure storage mechanisms
+
+## Implementation Status
+
+| Feature | Status |
+|---|---|
+| Patient UI | ✅ Implemented |
+| AI Vaidya UI | ✅ Implemented |
+| Clinical Story UI | ✅ Implemented |
+| Doctor Dashboard UI | ✅ Implemented |
+| Document Upload UI | ✅ Implemented |
+| AYUSH UI | ✅ Prototype |
+| Red-Flag UI | ✅ Prototype |
+| Backend API | 🟡 Planned |
+| Database | 🟡 Planned |
+| Real OCR | 🟡 Planned |
+| Real ASR/TTS | 🟡 Planned |
+| EHR Integration | 🔵 Future |
+
 ---
+
+## Roadmap
+
+### Phase 1 — Review 1
+Core UI and workflow prototype
+
+### Phase 2
+Backend + database
+
+### Phase 3
+Real AI + multilingual speech
+
+### Phase 4
+OCR/document intelligence
+
+### Phase 5
+Security + authentication
+
+### Phase 6
+Clinical usability testing
+
+### Phase 7
+EHR/hospital integration
 
 ## 🔒 Safety & Regulatory Notice
 
