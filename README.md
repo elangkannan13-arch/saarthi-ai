@@ -1666,7 +1666,7 @@ Install:
 ## Step 1 — Clone Repository
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/saarthi-ai.git
+git clone https://github.com/elangkannan13-arch/saarthi-ai.git
 cd saarthi-ai
 ```
 
