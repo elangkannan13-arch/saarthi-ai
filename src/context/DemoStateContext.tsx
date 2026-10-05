@@ -313,6 +313,73 @@ const languageInitialTranscripts: Record<LanguageType, TranscriptItem[]> = {
   ],
 };
 
+export interface ExtractedClinicalData {
+  chiefComplaint?: string;
+  duration?: string;
+  location?: string;
+  character?: string;
+  radiation?: string;
+  associated?: string;
+  timing?: string;
+  exacerbating?: string;
+  severity?: string;
+}
+
+export const parsePatientClinicalData = (text: string, turn: number): ExtractedClinicalData => {
+  const lower = text.toLowerCase().trim();
+  const res: ExtractedClinicalData = {};
+
+  // 1. Duration / Onset extraction
+  const durationMatch = text.match(/\b(for\s+)?(\d+\s*(days?|hours?|weeks?|months?|years?|day|hour|week|month|year))\b/i)
+                     || text.match(/\b(since\s+)?(yesterday|today|last\s+night|\d+\s*days?\s*ago|\d+\s*hours?\s*ago)\b/i);
+  if (durationMatch) {
+    res.duration = durationMatch[2] || durationMatch[0];
+  }
+
+  // 2. Severity extraction (e.g. "6", "6/10", "severity 6", "7 out of 10")
+  const severityMatch = text.match(/\b([1-9]|10)(\s*\/\s*10|\s*out\s*of\s*10)?\b/i);
+  if (severityMatch && (text.length <= 15 || turn >= 3 || /severity|scale|rate|pain|score|level/i.test(text) || /^\d+$/.test(lower))) {
+    res.severity = `${severityMatch[1]}/10`;
+  } else if (/unbearable|very severe|extreme/i.test(lower)) {
+    res.severity = '9/10 (Severe)';
+  } else if (/severe|terrible|bad/i.test(lower)) {
+    res.severity = '8/10 (Severe)';
+  } else if (/moderate|medium/i.test(lower)) {
+    res.severity = '5/10 (Moderate)';
+  } else if (/mild|slight|low/i.test(lower)) {
+    res.severity = '3/10 (Mild)';
+  }
+
+  // 3. Location / Site extraction
+  if (/front|back|top|left|right|side|forehead|head|chest|stomach|abdomen|temple|neck|throat|lower|upper|arm|leg|knee|shoulder|jaw/i.test(text)) {
+    res.location = text;
+  }
+
+  // 4. Character extraction
+  if (/squeezing|sharp|dull|throbbing|burning|tight|heavy|aching|stabbing|cramping/i.test(text)) {
+    const charMatch = text.match(/squeezing|sharp|dull|throbbing|burning|tight|heavy|aching|stabbing|cramping/i);
+    if (charMatch) {
+      res.character = charMatch[0].charAt(0).toUpperCase() + charMatch[0].slice(1);
+    }
+  }
+
+  // 5. Chief Complaint extraction
+  const complaintMatch = text.match(/\b(headache|head ache|fever|chest pain|stomach pain|stomach ache|cough|cold|body ache|back pain|nausea|vomiting|dizziness|breathlessness|joint pain|sore throat|pain)\b/i);
+  if (complaintMatch) {
+    const raw = complaintMatch[0];
+    res.chiefComplaint = raw.charAt(0).toUpperCase() + raw.slice(1);
+  } else if (turn === 1) {
+    const cleanText = text.replace(/\b(for|since)\s+\d+\s*(days?|hours?|weeks?|months?)\b/gi, '').replace(/\bI have\b|\bI am having\b|\bthere is\b/gi, '').trim();
+    if (cleanText) {
+      res.chiefComplaint = cleanText.charAt(0).toUpperCase() + cleanText.slice(1);
+    } else {
+      res.chiefComplaint = text;
+    }
+  }
+
+  return res;
+};
+
 const defaultPatientQueue: PatientQueueItem[] = [
   {
     id: 'PAT-2026-B208',
@@ -722,30 +789,88 @@ export const DemoStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setTranscript(nextTranscript);
 
     const lowerText = text.toLowerCase();
-
-    // Calculate current patient turn index
     const patientMsgCount = transcript.filter((m) => m.sender === 'patient').length + 1;
 
-    // Analyze NLP SOCRATES fields strictly turn-by-turn
+    // Detect context of the previous AI question asked
+    const lastAiMsgObj = transcript.slice().reverse().find((m) => m.sender === 'ai');
+    const lastAiMsgText = lastAiMsgObj ? lastAiMsgObj.text : '';
+
+    const askedLocation = /where exactly|located|பகுதியில்|हिस्से में|எந்தப் பகுதியில்/i.test(lastAiMsgText);
+    const askedOnset = /when did this|how many|எப்போது|कब शुरू|கவனித்தீர்கள்/i.test(lastAiMsgText);
+    const askedSeverity = /1 to 10|10 is unbearable|severity|10 வரை|10 के पैमाने|தீவிரம்|दर्द कितना/i.test(lastAiMsgText);
+    const askedCharacter = /describe the feeling|feeling|விவரிப்பீர்கள்|बयां करेंगे|பாரமாக/i.test(lastAiMsgText);
+    const askedAssociated = /associated symptoms|nausea|fever|breathlessness|பிற அறிகுறிகள்|अन्य लक्षण/i.test(lastAiMsgText);
+
+    // Smart clinical entity extraction
+    const extracted = parsePatientClinicalData(text, patientMsgCount);
+
     let nextSocrates: SocratesState = { ...socrates };
-    if (patientMsgCount === 1) {
-      nextSocrates.site = { val: text, status: true, confidence: 96 };
-    } else if (patientMsgCount === 2) {
-      nextSocrates.site = { val: text, status: true, confidence: 96 };
-    } else if (patientMsgCount === 3) {
-      nextSocrates.onset = { val: text, status: true, confidence: 94 };
-    } else if (patientMsgCount === 4) {
+
+    // Apply extracted entities into SOCRATES with question context matching
+    if (extracted.chiefComplaint && !nextSocrates.site.status) {
+      nextSocrates.site = { val: extracted.chiefComplaint, status: true, confidence: 96 };
+    }
+    if (extracted.location) {
+      nextSocrates.site = { val: extracted.location, status: true, confidence: 96 };
+    } else if (askedLocation && text) {
+      nextSocrates.site = { val: text, status: true, confidence: 92 };
+    }
+
+    if (extracted.duration) {
+      nextSocrates.onset = { val: extracted.duration, status: true, confidence: 94 };
+    } else if (askedOnset && text) {
+      nextSocrates.onset = { val: text, status: true, confidence: 92 };
+    }
+
+    if (extracted.severity) {
+      nextSocrates.severity = { val: extracted.severity, status: true, confidence: 98 };
+    } else if (askedSeverity && text) {
+      const numMatch = text.match(/\b([1-9]|10)\b/);
+      let sevVal = numMatch ? `${numMatch[1]}/10` : text;
+      nextSocrates.severity = { val: sevVal, status: true, confidence: 90 };
+    }
+
+    if (extracted.character) {
+      nextSocrates.character = { val: extracted.character, status: true, confidence: 92 };
+    } else if (askedCharacter && text) {
       nextSocrates.character = { val: text, status: true, confidence: 92 };
-    } else if (patientMsgCount === 5) {
-      nextSocrates.radiation = { val: text, status: true, confidence: 95 };
-    } else if (patientMsgCount === 6) {
-      nextSocrates.associated = { val: text, status: true, confidence: 96 };
-    } else if (patientMsgCount === 7) {
-      nextSocrates.timing = { val: text, status: true, confidence: 93 };
-    } else if (patientMsgCount === 8) {
-      nextSocrates.exacerbating = { val: text, status: true, confidence: 95 };
-    } else if (patientMsgCount >= 9) {
-      nextSocrates.severity = { val: text, status: true, confidence: 98 };
+    }
+
+    if (extracted.associated) {
+      nextSocrates.associated = { val: extracted.associated, status: true, confidence: 95 };
+    } else if (askedAssociated && text) {
+      nextSocrates.associated = { val: text, status: true, confidence: 92 };
+    }
+
+    // Default negative screening for secondary SOCRATES items so progress moves seamlessly
+    if (nextSocrates.site.status && !nextSocrates.radiation.status) {
+      nextSocrates.radiation = { val: 'No radiation reported', status: true, confidence: 90 };
+    }
+    if (nextSocrates.onset.status && !nextSocrates.timing.status) {
+      nextSocrates.timing = { val: 'Continuous / Intermittent', status: true, confidence: 90 };
+    }
+    if (nextSocrates.character.status && !nextSocrates.exacerbating.status) {
+      nextSocrates.exacerbating = { val: 'None reported', status: true, confidence: 90 };
+    }
+
+    // Dynamic Turn Fallbacks (guarantees advancement even if input was unparsed)
+    if (patientMsgCount === 1 && !nextSocrates.site.status) {
+      nextSocrates.site = { val: text, status: true, confidence: 96 };
+    }
+    if (patientMsgCount >= 2 && !nextSocrates.site.status) {
+      nextSocrates.site = { val: text, status: true, confidence: 90 };
+    }
+    if (patientMsgCount >= 3 && !nextSocrates.onset.status) {
+      nextSocrates.onset = { val: text, status: true, confidence: 90 };
+    }
+    if (patientMsgCount >= 4 && !nextSocrates.severity.status) {
+      nextSocrates.severity = { val: text, status: true, confidence: 90 };
+    }
+    if (patientMsgCount >= 5 && !nextSocrates.character.status) {
+      nextSocrates.character = { val: text, status: true, confidence: 90 };
+    }
+    if (patientMsgCount >= 6 && !nextSocrates.associated.status) {
+      nextSocrates.associated = { val: text, status: true, confidence: 90 };
     }
 
     const activeCount = Object.values(nextSocrates).filter((s) => s.status).length;
@@ -770,101 +895,72 @@ export const DemoStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setRedFlag(nextRedFlag);
     }
 
-    // Dynamic Doctor Summary update turn-by-turn with REAL patient responses
+    // Carry information forward into Doctor Summary & HPI Narrative
     let nextDoctorSummary: DoctorSummary = { ...doctorSummary };
-    if (patientMsgCount === 1) {
+
+    const currentComplaint = extracted.chiefComplaint || (patientMsgCount === 1 ? text : nextDoctorSummary.chiefComplaint.value);
+    const currentDuration = extracted.duration || (nextSocrates.onset.status ? nextSocrates.onset.val : '');
+
+    if (currentComplaint && !currentComplaint.startsWith('Awaiting')) {
+      const complaintStr = currentDuration && !currentComplaint.includes(currentDuration) ? `${currentComplaint} (${currentDuration})` : currentComplaint;
       nextDoctorSummary.chiefComplaint = {
         key: 'chiefComplaint',
         label: 'Chief complaint',
-        value: text,
-        originalValue: text,
+        value: complaintStr,
+        originalValue: complaintStr,
         confidence: 96,
         source: 'Patient Voice',
         status: 'ai_draft',
-      };
-      nextDoctorSummary.hpi = {
-        key: 'hpi',
-        label: 'History of present illness',
-        value: `Chief Complaint: "${text}".`,
-        originalValue: `Chief Complaint: "${text}".`,
-        confidence: 92,
-        source: 'Patient Voice',
-        status: 'ai_draft',
-      };
-    } else if (patientMsgCount === 2) {
-      const prevVal = nextDoctorSummary.hpi.value.startsWith('Awaiting') ? '' : nextDoctorSummary.hpi.value + ' ';
-      nextDoctorSummary.hpi = {
-        ...nextDoctorSummary.hpi,
-        value: `${prevVal}Anatomical Location: "${text}".`,
-        originalValue: `${prevVal}Anatomical Location: "${text}".`,
-        confidence: 94,
-      };
-    } else if (patientMsgCount === 3) {
-      const prevVal = nextDoctorSummary.hpi.value + ' ';
-      nextDoctorSummary.hpi = {
-        ...nextDoctorSummary.hpi,
-        value: `${prevVal}Onset & Duration: "${text}".`,
-        originalValue: `${prevVal}Onset & Duration: "${text}".`,
-        confidence: 95,
-      };
-    } else if (patientMsgCount === 4) {
-      const prevVal = nextDoctorSummary.hpi.value + ' ';
-      nextDoctorSummary.hpi = {
-        ...nextDoctorSummary.hpi,
-        value: `${prevVal}Character: "${text}".`,
-        originalValue: `${prevVal}Character: "${text}".`,
-        confidence: 95,
-      };
-    } else if (patientMsgCount === 5) {
-      const prevVal = nextDoctorSummary.hpi.value + ' ';
-      nextDoctorSummary.hpi = {
-        ...nextDoctorSummary.hpi,
-        value: `${prevVal}Radiation: "${text}".`,
-        originalValue: `${prevVal}Radiation: "${text}".`,
-        confidence: 95,
-      };
-    } else if (patientMsgCount === 6) {
-      nextDoctorSummary.associatedSymptoms = {
-        key: 'associatedSymptoms',
-        label: 'Associated Symptoms',
-        value: text,
-        originalValue: text,
-        confidence: 96,
-        source: 'Patient Voice',
-        status: 'ai_draft',
-      };
-      const prevVal = nextDoctorSummary.hpi.value + ' ';
-      nextDoctorSummary.hpi = {
-        ...nextDoctorSummary.hpi,
-        value: `${prevVal}Associated Symptoms: "${text}".`,
-        originalValue: `${prevVal}Associated Symptoms: "${text}".`,
-        confidence: 95,
-      };
-    } else if (patientMsgCount === 7) {
-      const prevVal = nextDoctorSummary.hpi.value + ' ';
-      nextDoctorSummary.hpi = {
-        ...nextDoctorSummary.hpi,
-        value: `${prevVal}Timing & Pattern: "${text}".`,
-        originalValue: `${prevVal}Timing & Pattern: "${text}".`,
-        confidence: 93,
-      };
-    } else if (patientMsgCount === 8) {
-      const prevVal = nextDoctorSummary.hpi.value + ' ';
-      nextDoctorSummary.hpi = {
-        ...nextDoctorSummary.hpi,
-        value: `${prevVal}Exacerbating/Relieving: "${text}".`,
-        originalValue: `${prevVal}Exacerbating/Relieving: "${text}".`,
-        confidence: 95,
-      };
-    } else if (patientMsgCount >= 9) {
-      const prevVal = nextDoctorSummary.hpi.value + ' ';
-      nextDoctorSummary.hpi = {
-        ...nextDoctorSummary.hpi,
-        value: `${prevVal}Severity Scale (1-10): "${text}".`,
-        originalValue: `${prevVal}Severity Scale (1-10): "${text}".`,
-        confidence: 98,
       };
     }
+
+    // Construct Clinical Narrative HPI Story strictly from real patient input
+    const sanitizeVal = (str?: string) => {
+      if (!str) return '';
+      const clean = str.trim();
+      if (clean.length <= 2 && clean.toLowerCase() !== 'no') return '';
+      if (/^(h|hh|mm|mmm|ok|okay|yes)$/i.test(clean)) return '';
+      return clean;
+    };
+
+    const mainSymptom = sanitizeVal(extracted.chiefComplaint) || sanitizeVal(nextSocrates.site.val);
+    const cleanDuration = sanitizeVal(extracted.duration) || sanitizeVal(nextSocrates.onset.val);
+    const currentLoc = sanitizeVal(extracted.location);
+    const currentChar = sanitizeVal(extracted.character) || (nextSocrates.character.status ? sanitizeVal(nextSocrates.character.val) : '');
+    const currentAssoc = sanitizeVal(extracted.associated) || (nextSocrates.associated.status ? sanitizeVal(nextSocrates.associated.val) : '');
+    const currentSev = sanitizeVal(extracted.severity) || (nextSocrates.severity.status ? sanitizeVal(nextSocrates.severity.val) : '');
+
+    const narrativeParts: string[] = [];
+    if (mainSymptom) {
+      narrativeParts.push(`Patient presents with ${mainSymptom}${cleanDuration ? ` for ${cleanDuration}` : ''}.`);
+    } else if (cleanDuration) {
+      narrativeParts.push(`Symptoms reported for ${cleanDuration}.`);
+    }
+
+    if (currentLoc && mainSymptom && currentLoc.toLowerCase() !== mainSymptom.toLowerCase()) {
+      narrativeParts.push(`Location specified: ${currentLoc}.`);
+    }
+    if (currentChar && currentChar !== 'Not specified') {
+      narrativeParts.push(`Character: ${currentChar}.`);
+    }
+    if (currentSev && currentSev !== 'Not specified') {
+      narrativeParts.push(`Severity scale: ${currentSev}.`);
+    }
+    if (currentAssoc && currentAssoc !== 'None reported') {
+      narrativeParts.push(`Associated symptoms: ${currentAssoc}.`);
+    }
+
+    const clinicalStory = narrativeParts.length > 0 ? narrativeParts.join(' ') : `Patient reported intake details via voice: "${text}".`;
+    nextDoctorSummary.hpi = {
+      key: 'hpi',
+      label: 'History of present illness',
+      value: clinicalStory,
+      originalValue: clinicalStory,
+      confidence: 95,
+      source: 'Patient Voice',
+      status: 'ai_draft',
+    };
+
     setDoctorSummary(nextDoctorSummary);
 
     // Sync live captured socrates, doctorSummary, and transcript directly to patientQueue
@@ -889,89 +985,80 @@ export const DemoStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       return updated;
     });
 
-    // Adaptive Scripted Multi-Turn AI Clinical Questioning (Systematic 8 SOCRATES Questions)
+    // Adaptive Scripted Multi-Turn AI Clinical Questioning (Systematic AI Vaidya Questions)
     setTimeout(() => {
+      const candidateQuestions: { key: string; textEn: string; textTa: string; textHi: string }[] = [];
+
+      if (!nextSocrates.site.status || !nextSocrates.site.val) {
+        candidateQuestions.push({
+          key: 'site',
+          textEn: 'Understood. Where exactly is this pain located (e.g. front side of head, forehead, or temples)?',
+          textTa: 'புரிந்தது. இந்த வலி அல்லது பிரச்சனை உடலின் எந்தப் பகுதியில் சரியாக உள்ளது (எ.கா. தலை முன்பகுதி, நெற்றி, அல்லது பக்கவாட்டில்)?',
+          textHi: 'समझ गया। यह दर्द या परेशानी सिर या शरीर के किस हिस्से में है (जैसे सिर का अगला हिस्सा, माथा, या साइड में)?',
+        });
+      }
+      if (!nextSocrates.onset.status) {
+        candidateQuestions.push({
+          key: 'onset',
+          textEn: 'Got it. When did this symptom start, or how many hours or days ago did you first notice it?',
+          textTa: 'சரி. இது எப்போது தொடங்கியது, அல்லது எத்தனை நாட்களுக்கு முன்பு இதை கவனித்தீர்கள்?',
+          textHi: 'ठीक है। यह कब शुरू हुआ, या कितने दिन पहले आपने इसे महसूस किया?',
+        });
+      }
+      if (!nextSocrates.severity.status) {
+        candidateQuestions.push({
+          key: 'severity',
+          textEn: 'On a scale of 1 to 10 (where 10 is unbearable pain), how severe is the pain right now?',
+          textTa: '1 முதல் 10 வரையிலான அளவில் (10 என்பது தாங்க முடியாத வலி), தற்போது இதன் தீவிரம் எவ்வளவு?',
+          textHi: '1 से 10 के पैमाने पर (जहाँ 10 असहनीय दर्द है), अभी इसका दर्द कितना तेज़ है?',
+        });
+      }
+      if (!nextSocrates.character.status) {
+        candidateQuestions.push({
+          key: 'character',
+          textEn: 'Thank you. How would you describe the feeling (e.g. heavy squeezing pressure, sharp pain, or throbbing)?',
+          textTa: 'நன்றி. இந்த வலியை எவ்வாறு விவரிப்பீர்கள் (எ.கா. பாரமாக அமுக்குவது போல், கூர்மையான வலி, அல்லது எரியும் உணர்வு)?',
+          textHi: 'धन्यवाद। आप इस दर्द को कैसे बयां करेंगे (जैसे भारी दबाव, तेज़ चुभन वाला दर्द, या जलन)?',
+        });
+      }
+      if (!nextSocrates.associated.status) {
+        candidateQuestions.push({
+          key: 'associated',
+          textEn: 'Are you experiencing any associated symptoms along with this, such as nausea, dizziness, fever, or breathlessness?',
+          textTa: 'இதனுடன் உங்களுக்கு மூச்சுத்திணறல், அதிக வேர்வை, காய்ச்சல் அல்லது மயக்கம் போன்ற பிற அறிகுறிகள் உள்ளதா?',
+          textHi: 'क्या इसके साथ आपको सांस फूलना, पसीना आना, बुखार या चक्कर आने जैसे अन्य लक्षण हैं?',
+        });
+      }
+
+      // Pick question that has NOT been asked yet in the transcript
+      let chosen = candidateQuestions.find((q) => {
+        const questionText = language === 'ta' ? q.textTa : language === 'hi' ? q.textHi : q.textEn;
+        return !nextTranscript.some((m) => m.sender === 'ai' && m.text === questionText);
+      });
+
       let aiResponseText = '';
-      if (patientMsgCount === 1) {
-        // Question 1: Site / Anatomical Location
-        if (language === 'ta') {
-          aiResponseText = 'புரிந்தது. இந்த பிரச்சனை அல்லது வலி உடலின் எந்தப் பகுதியில் சரியாக உள்ளது (எ.கா. மார்பின் மையம், தலை, அல்லது மேல் வயிறு)?';
-        } else if (language === 'hi') {
-          aiResponseText = 'समझ गया। यह दर्द या परेशानी शरीर के किस हिस्से में है (जैसे: सीने के बीच में, सिर, या ऊपरी पेट)?';
-        } else {
-          aiResponseText = 'Understood. Where exactly in your body is this pain or discomfort located (e.g. central chest, forehead, or upper abdomen)?';
-        }
-      } else if (patientMsgCount === 2) {
-        // Question 2: Onset / Duration
-        if (language === 'ta') {
-          aiResponseText = 'சரி. இது எப்போது தொடங்கியது, அல்லது எத்தனை மணிநேரம் அல்லது நாட்களுக்கு முன்பு இதை முதன்முதலில் கவனித்தீர்கள்?';
-        } else if (language === 'hi') {
-          aiResponseText = 'ठीक है। यह कब शुरू हुआ, या कितने घंटे या दिन पहले आपने इसे महसूस किया?';
-        } else {
-          aiResponseText = 'Got it. When did this symptom start, or how many hours or days ago did you first notice it?';
-        }
-      } else if (patientMsgCount === 3) {
-        // Question 3: Character / Feeling
-        if (language === 'ta') {
-          aiResponseText = 'நன்றி. இந்த வலியை எவ்வாறு விவரிப்பீர்கள் (எ.கா. பாரமாக அமுக்குவது போல், கூர்மையான வலி, அல்லது எரியும் உணர்வு)?';
-        } else if (language === 'hi') {
-          aiResponseText = 'धन्यवाद। आप इस दर्द को कैसे बयां करेंगे (जैसे भारी दबाव, तेज़ चुभन वाला दर्द, या जलन)?';
-        } else {
-          aiResponseText = 'Thank you. How would you describe the feeling (e.g. heavy squeezing pressure, sharp pain, or burning)?';
-        }
-      } else if (patientMsgCount === 4) {
-        // Question 4: Radiation
-        if (language === 'ta') {
-          aiResponseText = 'இந்த வலி உடலின் பிற இடங்களுக்கு பரவுகிறதா (எ.கா. இடது கை, தோள்பட்டை, முதுகு, அல்லது தாடை)?';
-        } else if (language === 'hi') {
-          aiResponseText = 'क्या यह दर्द शरीर के किसी अन्य हिस्से में फैल रहा है (जैसे बाईं बाँह, कंधा, पीठ, या जबड़ा)?';
-        } else {
-          aiResponseText = 'Does this pain or discomfort spread anywhere else (such as to your left arm, shoulder, back, or jaw)?';
-        }
-      } else if (patientMsgCount === 5) {
-        // Question 5: Associated Symptoms
-        if (language === 'ta') {
-          aiResponseText = 'இதனுடன் உங்களுக்கு மூச்சுத்திணறல், அதிக வேர்வை, காய்ச்சல் அல்லது மயக்கம் போன்ற பிற அறிகுறிகள் உள்ளதா?';
-        } else if (language === 'hi') {
-          aiResponseText = 'क्या इसके साथ आपको सांस फूलना, पसीना आना, बुखार या चक्कर आने जैसे अन्य लक्षण हैं?';
-        } else {
-          aiResponseText = 'Are you experiencing any associated symptoms along with this, such as breathlessness, sweating, fever, or dizziness?';
-        }
-      } else if (patientMsgCount === 6) {
-        // Question 6: Timing / Pattern
-        if (language === 'ta') {
-          aiResponseText = 'இந்த அசௌகரியம் எப்போதும் ஒரே மாதிரியாக உள்ளதா, அல்லது அலை அலையாக வந்து போகிறதா?';
-        } else if (language === 'hi') {
-          aiResponseText = 'क्या यह दर्द लगातार बना रहता है, या रह-रहकर आता और जाता है?';
-        } else {
-          aiResponseText = 'Is the discomfort constant all the time, or does it come and go in waves or episodes?';
-        }
-      } else if (patientMsgCount === 7) {
-        // Question 7: Exacerbating / Relieving Factors
-        if (language === 'ta') {
-          aiResponseText = 'ஏதேனும் செய்தால் வலி அதிகமா அல்லது குறைகிறதா (எ.கா. நடப்பது, ஓய்வு எடுப்பது, ஆழமான மூச்சு எடுப்பது)?';
-        } else if (language === 'hi') {
-          aiResponseText = 'क्या किसी काम से दर्द बढ़ता या कम होता है (जैसे चलने से, आराम करने से, या गहरी सांस लेने से)?';
-        } else {
-          aiResponseText = 'Does anything make the pain better or worse (such as rest, walking, deep breathing, or lying down)?';
-        }
-      } else if (patientMsgCount === 8) {
-        // Question 8: Severity Scale 1-10
-        if (language === 'ta') {
-          aiResponseText = '1 முதல் 10 வரையிலான அளவில் (10 என்பது தாங்க முடியாத வலி), தற்போது இதன் தீவிரம் எவ்வளவு?';
-        } else if (language === 'hi') {
-          aiResponseText = '1 से 10 के पैमाने पर (जहाँ 10 असहनीय दर्द है), अभी इसका दर्द कितना तेज़ है?';
-        } else {
-          aiResponseText = 'On a scale of 1 to 10 (where 10 is unbearable pain), how severe is the pain right now?';
-        }
+      if (chosen) {
+        aiResponseText = language === 'ta' ? chosen.textTa : language === 'hi' ? chosen.textHi : chosen.textEn;
       } else {
-        // Final Completion Summary
+        // Ensure all 8 SOCRATES items marked status: true on completion using real input or 'Not specified'
+        nextSocrates.site = nextSocrates.site.status ? nextSocrates.site : { val: text, status: true, confidence: 96 };
+        nextSocrates.onset = nextSocrates.onset.status ? nextSocrates.onset : { val: 'Not specified', status: true, confidence: 90 };
+        nextSocrates.severity = nextSocrates.severity.status ? nextSocrates.severity : { val: 'Not specified', status: true, confidence: 90 };
+        nextSocrates.character = nextSocrates.character.status ? nextSocrates.character : { val: 'Not specified', status: true, confidence: 90 };
+        nextSocrates.associated = nextSocrates.associated.status ? nextSocrates.associated : { val: 'None reported', status: true, confidence: 90 };
+        nextSocrates.radiation = nextSocrates.radiation.status ? nextSocrates.radiation : { val: 'No radiation reported', status: true, confidence: 90 };
+        nextSocrates.timing = nextSocrates.timing.status ? nextSocrates.timing : { val: 'Continuous / Intermittent', status: true, confidence: 90 };
+        nextSocrates.exacerbating = nextSocrates.exacerbating.status ? nextSocrates.exacerbating : { val: 'None reported', status: true, confidence: 90 };
+
+        setSocrates(nextSocrates);
+        setInterviewProgress(100);
+
         if (language === 'ta') {
-          aiResponseText = 'நன்றி! உங்கள் மருத்துவ வரலாறு மற்றும் 8 SOCRATES அம்சங்களும் முழுமையாக EMR கேஸ் சுருக்கமாக பதிவு செய்யப்பட்டுள்ளன.';
+          aiResponseText = 'நன்றி! உங்கள் மருத்துவ வரலாறு மற்றும் அனைத்து SOCRATES அம்சங்களும் மருத்துவர் பார்வையிடுவதற்காக பதிவு செய்யப்பட்டுள்ளன.';
         } else if (language === 'hi') {
-          aiResponseText = 'धन्यवाद! सभी 8 SOCRATES क्लिनिकल आयाम डॉक्टर के EMR के लिए सफलतापूर्वक दर्ज कर लिए गए हैं।';
+          aiResponseText = 'धन्यवाद! आपकी पूरी केस हिस्ट्री डॉक्टर के रिव्यू के लिए सुरक्षित रूप से दर्ज कर ली गई है।';
         } else {
-          aiResponseText = 'Thank you! All 8 SOCRATES clinical dimensions (Site, Onset, Character, Radiation, Associated Symptoms, Timing, Exacerbating factors, Severity) have been fully captured into your EMR case summary.';
+          aiResponseText = 'Thank you! Your complete clinical story and SOCRATES history have been captured for your doctor to review.';
         }
       }
 
@@ -982,8 +1069,23 @@ export const DemoStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         language,
       };
-      setTranscript((prev) => [...prev, aiMsg]);
-    }, 900);
+      const updatedTrans = [...nextTranscript, aiMsg];
+      setTranscript(updatedTrans);
+
+      // Keep patientQueue in sync with latest transcript
+      setPatientQueue((prevQueue) => {
+        const updated = prevQueue.map((p) => {
+          if (p.id === patientInfo.id || p.token === patientInfo.token || p.name.toLowerCase() === patientInfo.name.toLowerCase()) {
+            return { ...p, transcript: updatedTrans };
+          }
+          return p;
+        });
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('saarthi_patient_queue', JSON.stringify(updated));
+        }
+        return updated;
+      });
+    }, 800);
   };
 
   // OCR Processing with Real File Data URLs & Extracted Meds

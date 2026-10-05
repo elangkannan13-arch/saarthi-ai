@@ -1,7 +1,8 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useDemoState } from '../context/DemoStateContext';
 import { QRCodeSvg } from '../components/QRCodeSvg';
-import { CheckCircle2, Clock, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, Clock, ShieldCheck, Stethoscope, ArrowRight } from 'lucide-react';
 
 const translations = {
   ta: {
@@ -43,6 +44,7 @@ const translations = {
 };
 
 export const PatientReviewPage: React.FC = () => {
+  const navigate = useNavigate();
   const { patientInfo, language } = useDemoState();
 
   const t = translations[language] || translations.en;
@@ -109,6 +111,16 @@ export const PatientReviewPage: React.FC = () => {
             <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>{t.waitingNotice}</span>
           </div>
+
+          {/* Direct Button to Switch to Doctor Dashboard */}
+          <button
+            onClick={() => navigate('/doctor/queue')}
+            className="w-full py-4 px-6 rounded-2xl bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-sm shadow-xl transition-all hover:scale-[1.02] flex items-center justify-center gap-2.5"
+          >
+            <Stethoscope className="w-5 h-5 text-teal-200" />
+            <span>Switch to Doctor Dashboard (Review Case Sheet)</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </div>
